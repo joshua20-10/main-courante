@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Main courante – Sécurité</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+*{box-sizing:border-box}
+body{font-family:Arial;background:#f2f2f2;padding:10px}
+.box{background:#fff;padding:20px;border-radius:10px;max-width:420px;margin:20px auto}
+h2,h3{text-align:center}
+input,select,textarea,button{
+  width:100%;padding:10px;margin:5px 0;
+  border-radius:6px;border:1px solid #ccc;font-size:16px
+}
+button{background:#007bff;color:#fff;border:none;cursor:pointer}
+button:hover{opacity:.9}
+.hidden{display:none}
+.relative{position:relative}
+.eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer}
+.incident{border:1px solid #ccc;padding:8px;margin:8px 0;border-radius:6px}
+img{max-width:100%;border-radius:6px;margin-top:5px}
+#preview{display:none}
+.admin{background:#ffeeba;padding:10px;border-radius:6px;margin-bottom:10px}
+.actions{display:flex;gap:5px;margin-top:5px}
+.actions button{flex:1;font-size:14px}
+.red{background:#dc3545}
+.edit{background:#ffc107;color:#000}
+</style>
+</head>
+
+<body>
+
+<!-- LOGIN -->
+<div class="box" id="loginBox">
+  <h2>Connexion</h2>
+  <input id="loginUser" placeholder="Identifiant">
+  <div class="relative">
+    <input id="loginPass" type="password" placeholder="Mot de passe">
+    <span class="eye" onclick="togglePass()">👁️</span>
+  </div>
+  <button onclick="login()">Connexion</button>
+  <div id="loginError" style="color:red"></div>
+</div>
+
+<!-- APP -->
+<div class="box hidden" id="app">
+
+<!-- ADMIN -->
+<div class="admin hidden" id="adminBox">
+  <h3>Administration</h3>
+  <input id="newAgentId" placeholder="Identifiant agent">
+  <input id="newAgentPass" placeholder="Mot de passe agent">
+  <label>
+    <input type="checkbox" id="newAgentAdmin"> Administrateur
+  </label>
+  <button onclick="addAgent()">Créer l’agent</button>
+  <div id="agentList"></div>
+</div>
+
+<h3>Main courante</h3>
+<form id="incidentForm">
+  <label>Date et heure</label>
+  <input type="datetime-local" id="incidentDate" required>
+
+  <label>Type</label>
+  <select id="type">
+    <option>Observation</option>
+    <option>Contrôle</option>
+    <option>Incident</option>
+    <option>Autre</option>
+  </select>
+
+  <textarea id="note" placeholder="Description / note"></textarea>
+
+  <button type="button" onclick="photoGallery.click()">📁 Choisir dans la galerie</button>
+  <input type="file" id="photoGallery" accept="image/*" class="hidden">
+
+  <button type="button" onclick="photoCamera.click()">📷 Prendre une photo</button>
+  <input type="file" id="photoCamera" accept="image/*" capture="environment" class="hidden">
+
+  <img id="preview">
+  <button>Enregistrer</button>
+</form>
+
+<h3>Historique</h3>
+<div id="list"></div>
+
+<button onclick="logout()">Déconnexion</button>
+</div>
+
+<!-- FIREBASE SCRIPTS COMPAT POUR GH-PAGES -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<script>
+// ===== INIT FIREBASE =====
+const firebaseConfig = {
+  apiKey: "AIzaSyCjmbcXme8w4SyT-dNY5UjW3qi1_Bj3ZTM",
+  authDomain: "main-courante-bee09.firebaseapp.com",
+  projectId: "main-courante-bee09",
+  storageBucket: "main-courante-bee09.firebasestorage.app",
+  messagingSenderId: "1022529424997",
+  appId: "1:1022529424997:web:9b93ae5bbfc20562a9008c"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ===== VARIABLES =====
+let currentUser=null,isAdmin=false,editId=null;
+
+// ===== LOGIN =====
+async function login(){
+  const userId = loginUser.value.trim();
+  const pass = loginPass.value.trim();
+
+  try {
+    const agentsSnap = await db.collection("agents").get();
+    let user = null;
+
+    agentsSnap.forEach(docSnap=>{
+      const a = docSnap.data();
+      if(a.id===userId && a.pass===pass) user=a;
+    });
+
+    if(!user){
+      loginError.textContent="Identifiants incorrects";
+      return;
+    }
+
+    currentUser=user.id;
+    isAdmin=user.admin;
+    loginBox.classList.add("hidden");
+    app.classList.remove("hidden");
+    if(isAdmin){adminBox.classList.remove("hidden"); renderAgents();}
+    renderIncidents();
+
+  } catch(e){
+    console.error(e);
+    loginError.textContent="Erreur Firebase";
+  }
+}
+
+function togglePass(){loginPass.type = loginPass.type==="password"?"text":"password";}
+function logout(){location.reload();}
+
+// ===== ADMIN =====
+async function addAgent(){
+  const id=newAgentId.value.trim();
+  const pass=newAgentPass.value.trim();
+  const admin=newAgentAdmin.checked;
+  if(!id||!pass)return alert("Remplir les champs");
+  await db.collection("agents").doc(id).set({id,pass,admin});
+  renderAgents();
+}
+
+async function renderAgents(){
+  agentList.innerHTML="";
+  const agentsSnap = await db.collection("agents").get();
+  agentsSnap.forEach(d=>{
+    const a = d.data();
+    agentList.innerHTML+=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
+      <span>${a.id} ${a.admin?"(Admin)":""}</span>
+      ${a.id!=="Admin"?`<button class="red" onclick="delAgent('${a.id}')">❌</button>`:""}
+    </div>`;
+  });
+}
+
+async function delAgent(id){
+  if(confirm("Supprimer cet agent ?")){
+    await db.collection("agents").doc(id).delete();
+    renderAgents();
+  }
+}
+
+// ===== PHOTO PREVIEW =====
+photoGallery.onchange=photoCamera.onchange=()=>{
+  const f=photoCamera.files[0]||photoGallery.files[0];
+  if(!f)return;
+  const r=new FileReader();
+  r.onload=e=>{preview.src=e.target.result;preview.style.display="block";}
+  r.readAsDataURL(f);
+};
+
+// ===== SAVE INCIDENT =====
+incidentForm.onsubmit=async e=>{
+  e.preventDefault();
+  const imgFile = photoCamera.files[0]||photoGallery.files[0];
+  if(imgFile){
+    const r=new FileReader();
+    r.onload=e=>saveIncident(e.target.result);
+    r.readAsDataURL(imgFile);
+  }else{
+    saveIncident(editId?editId.img:"");
+  }
+};
+
+async function saveIncident(img){
+  const data={
+    user:currentUser,
+    date:incidentDate.value,
+    type:type.value,
+    note:note.value,
+    img
+  };
+  if(editId){
+    await db.collection("incidents").doc(editId).update(data);
+    editId=null;
+  }else{
+    await db.collection("incidents").add(data);
+  }
+  incidentForm.reset(); preview.style.display="none";
+  renderIncidents();
+}
+
+// ===== DISPLAY INCIDENTS =====
+async function renderIncidents(){
+  list.innerHTML="";
+  const snap = await db.collection("incidents").orderBy("date","desc").get();
+  snap.forEach(d=>{
+    const i=d.data();
+    const id=d.id;
+    if(isAdmin||i.user===currentUser){
+      const dDate=new Date(i.date);
+      const dateFR=`${String(dDate.getDate()).padStart(2,"0")}/${String(dDate.getMonth()+1).padStart(2,"0")}/${dDate.getFullYear()} à ${String(dDate.getHours()).padStart(2,"0")}:${String(dDate.getMinutes()).padStart(2,"0")}`;
+      const div=document.createElement("div");
+      div.className="incident";
+      div.innerHTML=`
+        <b>${i.type}</b> – ${i.user}<br>
+        ${dateFR}<br>
+        ${i.note}<br>
+        ${i.img?`<img src="${i.img}">`:""}
+        <div class="actions">
+          <button class="edit" onclick="editIncident('${id}')">✏️ Modifier</button>
+          <button class="red" onclick="delIncident('${id}')">❌ Supprimer</button>
+        </div>`;
+      list.appendChild(div);
+    }
+  });
+}
+
+async function editIncident(id){
+  const docSnap=await db.collection("incidents").doc(id).get();
+  const data=docSnap.data();
+  incidentDate.value=data.date;
+  type.value=data.type;
+  note.value=data.note;
+  if(data.img){preview.src=data.img;preview.style.display="block";}
+  editId=id;
+}
+
+async function delIncident(id){
+  if(confirm("Supprimer cette main courante ?")){
+    await db.collection("incidents").doc(id).delete();
+    renderIncidents();
+  }
+}
+
+// ===== INIT ADMIN =====
+(async()=>{
+  const adminDoc = await db.collection("agents").doc("Admin").get();
+  if(!adminDoc.exists){
+    await db.collection("agents").doc("Admin").set({id:"Admin",pass:"250825",admin:true});
+  }
+})();
+</script>
+
+</body>
+</html>
